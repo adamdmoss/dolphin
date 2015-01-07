@@ -46,6 +46,9 @@ bool PulseAudio::Start()
 
 void PulseAudio::Stop()
 {
+	// kick the thread if it's waiting
+	m_soundSyncEvent.Set();
+	
 	m_run_thread = false;
 	m_thread.join();
 
@@ -54,6 +57,8 @@ void PulseAudio::Stop()
 
 void PulseAudio::Update()
 {
+	// kick the thread if it's waiting
+	m_soundSyncEvent.Set();
 	// don't need to do anything here.
 }
 
@@ -160,13 +165,6 @@ void PulseAudio::UnderflowCallback(pa_stream* s)
 
 void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 {
-	// fetch dst buffer directly from pulseaudio, so no memcpy is needed
-	void* buffer;
-	m_pa_error = pa_stream_begin_write(s, &buffer, &length);
-
-	if (!buffer || m_pa_error < 0)
-		return; // error will be printed from main loop
-
 	if (true)
 	{
 		float rate = m_mixer->GetCurrentSpeed();
@@ -176,28 +174,38 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 			rate = m_mixer->GetCurrentSpeed();
 		}
 		
-		//m_tempo = 0.95 * m_tempo + 0.05 * rate;
-		//m_tempo = std::min(m_tempo, rate);
-		if (rate > m_tempo) // lower tempo quickly, raise slowly
+		if (false)
 		{
-			m_tempo = 0.95 * m_tempo + 0.05 * rate;
+			//m_tempo = 0.95 * m_tempo + 0.05 * rate;
+			//m_tempo = std::min(m_tempo, rate);
+			if (rate > m_tempo) // lower tempo quickly, raise slowly
+			{
+				m_tempo = 0.95 * m_tempo + 0.05 * rate;
+			}
+			else
+			{
+				m_tempo = 0.90 * m_tempo + 0.10 * rate;
+			}
 		}
 		else
 		{
-			m_tempo = 0.90 * m_tempo + 0.10 * rate;
+			m_tempo = rate;
 		}
-		
+
 		// Place a lower limit of 10% speed.  When a game boots up, there will be
 		// many silence samples.  These do not need to be timestretched.
+		m_tempo = std::max(0.10f, m_tempo);
+		
 		static int cnt = 0;
 		/*cnt = ((cnt + 1) % 100);
-		if (cnt == 0)*/ if (m_tempo > 0.10)
+		if (cnt == 0)*/
 		{
 			//NOTICE_LOG(AUDIO, "rate %0.4f / tempo %0.4f", rate, m_tempo);
 			m_soundTouch.setTempo(m_tempo);
 			if (m_tempo > 10)
 			{
 				m_soundTouch.clear();
+				NOTICE_LOG(AUDIO, "PulseAudio: Mixing way ahead, cleared timestretch FIFO");
 			}
 		}
 	}
@@ -214,25 +222,45 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 		
 		num_frames_received += m_soundTouch.receiveSamples(&stretched_mix[CHANNEL_COUNT*num_frames_received],
 				uint(num_frames_wanted - num_frames_received));
-		if (num_frames_received == num_frames_wanted)
-			break;
-		
-		m_mixer->Mix(raw_mix, num_frames_wanted);
-		for (int i=0; i<num_samples_wanted; ++i)
+		/*if (num_frames_received == num_frames_wanted)
 		{
-			float_mix[i] = raw_mix[i] / float(1 << 15);
+			NOTICE_LOG(AUDIO, "done");
+			break;
+		}*/
+		if (num_frames_received == 0)
+		{
+			// wait for tick?
+			m_soundSyncEvent.Wait();
+			//NOTICE_LOG(AUDIO, "mix");
+			m_mixer->Mix(raw_mix, num_frames_wanted, false);
+			for (int i=0; i<num_samples_wanted; ++i)
+			{
+				float_mix[i] = raw_mix[i] / float(1 << 15);
+			}
+			m_soundTouch.putSamples(float_mix, num_frames_wanted);
 		}
-		m_soundTouch.putSamples(float_mix, num_frames_wanted);
+		else
+		{
+			break;
+		}
 	}
 	
 	assert(sizeof(soundtouch::SAMPLETYPE) == sizeof(float));
-	for (int i=0; i<num_samples_wanted; ++i)
+	//NOTICE_LOG(AUDIO, "boop");
+
+	// fetch dst buffer directly from pulseaudio, so no memcpy is needed
+	void* buffer;
+	m_pa_error = pa_stream_begin_write(s, &buffer, &length);
+	
+	for (int i=0; i<num_frames_received*CHANNEL_COUNT; ++i)
 	{
 		((s16*)buffer)[i] = std::rint(stretched_mix[i] * float((1 << 15)-1));
 	}
-	//NOTICE_LOG(AUDIO, "boop");
-	
-	m_pa_error = pa_stream_write(s, buffer, length, nullptr, 0, PA_SEEK_RELATIVE);
+
+	if (!buffer || m_pa_error < 0)
+		return; // error will be printed from main loop
+
+	m_pa_error = pa_stream_write(s, buffer, num_frames_received*CHANNEL_COUNT*sizeof(s16), nullptr, 0, PA_SEEK_RELATIVE);
 }
 
 // Callbacks that forward to internal methods (required because PulseAudio is a C API).

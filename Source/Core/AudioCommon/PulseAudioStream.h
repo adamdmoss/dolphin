@@ -15,6 +15,7 @@
 
 #include "AudioCommon/SoundStream.h"
 #include "Common/CommonTypes.h"
+#include "Common/Event.h"
 #include "Common/Thread.h"
 
 class PulseAudio final : public SoundStream
@@ -58,6 +59,7 @@ private:
 	
 	soundtouch::SoundTouch m_soundTouch; // used for sample-stretching
 	float m_tempo;
+	Common::Event m_soundSyncEvent;
 #else
 public:
 	PulseAudio(CMixer *mixer) : SoundStream(mixer) {}
