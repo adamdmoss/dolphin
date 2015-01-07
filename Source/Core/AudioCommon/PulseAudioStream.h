@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include <atomic>
+
 #if defined(HAVE_PULSEAUDIO) && HAVE_PULSEAUDIO
 #include <pulse/pulseaudio.h>
 #endif
 
-#include <atomic>
+#include <soundtouch/SoundTouch.h>
+#include <soundtouch/STTypes.h>
 
 #include "AudioCommon/SoundStream.h"
 #include "Common/CommonTypes.h"
@@ -52,6 +55,8 @@ private:
 	pa_context *m_pa_ctx;
 	pa_stream *m_pa_s;
 	pa_buffer_attr m_pa_ba;
+	
+	soundtouch::SoundTouch m_soundTouch; // used for sample-stretching
 #else
 public:
 	PulseAudio(CMixer *mixer) : SoundStream(mixer) {}

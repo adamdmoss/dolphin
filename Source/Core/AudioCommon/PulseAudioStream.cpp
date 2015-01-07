@@ -5,6 +5,8 @@
 #include "AudioCommon/PulseAudioStream.h"
 #include "Common/CommonTypes.h"
 #include "Common/Thread.h"
+#include "Core/ConfigManager.h"
+#include "Core/Core.h"
 
 namespace
 {
@@ -22,8 +24,20 @@ PulseAudio::PulseAudio(CMixer *mixer)
 
 bool PulseAudio::Start()
 {
+	m_soundTouch.clear();
+
+	m_soundTouch.setChannels(2);
+	m_soundTouch.setSampleRate(m_mixer->GetSampleRate());
+	m_soundTouch.setTempo(1.0);
+	m_soundTouch.setSetting(SETTING_USE_QUICKSEEK, 0);
+	m_soundTouch.setSetting(SETTING_USE_AA_FILTER, 1);
+	m_soundTouch.setSetting(SETTING_SEQUENCE_MS, 1);
+	m_soundTouch.setSetting(SETTING_SEEKWINDOW_MS, 28);
+	m_soundTouch.setSetting(SETTING_OVERLAP_MS, 12);
+	
 	m_run_thread = true;
 	m_thread = std::thread(&PulseAudio::SoundLoop, this);
+	
 	return true;
 }
 
@@ -31,6 +45,8 @@ void PulseAudio::Stop()
 {
 	m_run_thread = false;
 	m_thread.join();
+
+	m_soundTouch.clear();
 }
 
 void PulseAudio::Update()
@@ -148,7 +164,57 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 	if (!buffer || m_pa_error < 0)
 		return; // error will be printed from main loop
 
-	m_mixer->Mix((s16*) buffer, length / sizeof(s16) / CHANNEL_COUNT);
+	if (true)
+	{
+		float rate = m_mixer->GetCurrentSpeed();
+		if (rate <= 0)
+		{
+			Core::RequestRefreshInfo();
+			rate = m_mixer->GetCurrentSpeed();
+		}
+		// Place a lower limit of 10% speed.  When a game boots up, there will be
+		// many silence samples.  These do not need to be timestretched.
+		if (rate > 0.10)
+		{
+			//NOTICE_LOG(AUDIO, "rate %f", rate);
+			m_soundTouch.setTempo(rate);
+			if (rate > 10)
+			{
+				m_soundTouch.clear();
+			}
+		}
+	}
+	
+	int num_samples_wanted = length / sizeof(s16);
+	int num_frames_wanted = num_samples_wanted / CHANNEL_COUNT;
+	int num_frames_received = 0;
+	s16 raw_mix[num_samples_wanted];
+	float float_mix[num_samples_wanted];
+	float stretched_mix[num_samples_wanted];
+	while (true)
+	{
+		//NOTICE_LOG(AUDIO, "got");
+		
+		num_frames_received += m_soundTouch.receiveSamples(&stretched_mix[CHANNEL_COUNT*num_frames_received],
+				uint(num_frames_wanted - num_frames_received));
+		if (num_frames_received == num_frames_wanted)
+			break;
+		
+		m_mixer->Mix(raw_mix, num_frames_wanted);
+		for (int i=0; i<num_samples_wanted; ++i)
+		{
+			float_mix[i] = raw_mix[i] / float(1 << 15);
+		}
+		m_soundTouch.putSamples(float_mix, num_frames_wanted);
+	}
+	
+	assert(sizeof(soundtouch::SAMPLETYPE) == sizeof(float));
+	for (int i=0; i<num_samples_wanted; ++i)
+	{
+		((s16*)buffer)[i] = std::rint(stretched_mix[i] * float((1 << 15)-1));
+	}
+	//NOTICE_LOG(AUDIO, "boop");
+	
 	m_pa_error = pa_stream_write(s, buffer, length, nullptr, 0, PA_SEEK_RELATIVE);
 }
 
