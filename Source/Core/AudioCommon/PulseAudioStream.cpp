@@ -46,9 +46,6 @@ bool PulseAudio::Start()
 
 void PulseAudio::Stop()
 {
-	// kick the thread if it's waiting
-	m_soundSyncEvent.Set();
-	
 	m_run_thread = false;
 	m_thread.join();
 
@@ -57,8 +54,6 @@ void PulseAudio::Stop()
 
 void PulseAudio::Update()
 {
-	// kick the thread if it's waiting
-	m_soundSyncEvent.Set();
 	// don't need to do anything here.
 }
 
@@ -165,6 +160,13 @@ void PulseAudio::UnderflowCallback(pa_stream* s)
 
 void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 {
+	// fetch dst buffer directly from pulseaudio, so no memcpy is needed
+	void* buffer;
+	m_pa_error = pa_stream_begin_write(s, &buffer, &length);
+
+	if (!buffer || m_pa_error < 0)
+		return; // error will be printed from main loop
+
 	if (true)
 	{
 		float rate = m_mixer->GetCurrentSpeed();
@@ -174,7 +176,7 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 			rate = m_mixer->GetCurrentSpeed();
 		}
 		
-		if (false)
+		if (true)
 		{
 			//m_tempo = 0.95 * m_tempo + 0.05 * rate;
 			//m_tempo = std::min(m_tempo, rate);
@@ -222,45 +224,26 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 		
 		num_frames_received += m_soundTouch.receiveSamples(&stretched_mix[CHANNEL_COUNT*num_frames_received],
 				uint(num_frames_wanted - num_frames_received));
-		/*if (num_frames_received == num_frames_wanted)
-		{
-			NOTICE_LOG(AUDIO, "done");
+		if (num_frames_received == num_frames_wanted)
 			break;
-		}*/
-		if (num_frames_received == 0)
+		
+		// wait for tick?
+		m_mixer->Mix(raw_mix, num_frames_wanted, false);
+		for (int i=0; i<num_samples_wanted; ++i)
 		{
-			// wait for tick?
-			m_soundSyncEvent.Wait();
-			//NOTICE_LOG(AUDIO, "mix");
-			m_mixer->Mix(raw_mix, num_frames_wanted, false);
-			for (int i=0; i<num_samples_wanted; ++i)
-			{
-				float_mix[i] = raw_mix[i] / float(1 << 15);
-			}
-			m_soundTouch.putSamples(float_mix, num_frames_wanted);
+			float_mix[i] = raw_mix[i] / float(1 << 15);
 		}
-		else
-		{
-			break;
-		}
+		m_soundTouch.putSamples(float_mix, num_frames_wanted);
 	}
 	
 	assert(sizeof(soundtouch::SAMPLETYPE) == sizeof(float));
-	//NOTICE_LOG(AUDIO, "boop");
-
-	// fetch dst buffer directly from pulseaudio, so no memcpy is needed
-	void* buffer;
-	m_pa_error = pa_stream_begin_write(s, &buffer, &length);
-	
-	for (int i=0; i<num_frames_received*CHANNEL_COUNT; ++i)
+	for (int i=0; i<num_samples_wanted; ++i)
 	{
 		((s16*)buffer)[i] = std::rint(stretched_mix[i] * float((1 << 15)-1));
 	}
-
-	if (!buffer || m_pa_error < 0)
-		return; // error will be printed from main loop
-
-	m_pa_error = pa_stream_write(s, buffer, num_frames_received*CHANNEL_COUNT*sizeof(s16), nullptr, 0, PA_SEEK_RELATIVE);
+	//NOTICE_LOG(AUDIO, "boop");
+	
+	m_pa_error = pa_stream_write(s, buffer, length, nullptr, 0, PA_SEEK_RELATIVE);
 }
 
 // Callbacks that forward to internal methods (required because PulseAudio is a C API).
