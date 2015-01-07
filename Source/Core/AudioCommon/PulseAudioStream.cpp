@@ -24,16 +24,19 @@ PulseAudio::PulseAudio(CMixer *mixer)
 
 bool PulseAudio::Start()
 {
+	m_tempo = 1.0;
+	
 	m_soundTouch.clear();
 
 	m_soundTouch.setChannels(2);
 	m_soundTouch.setSampleRate(m_mixer->GetSampleRate());
-	m_soundTouch.setTempo(1.0);
+	m_soundTouch.setTempo(m_tempo);
 	m_soundTouch.setSetting(SETTING_USE_QUICKSEEK, 0);
 	m_soundTouch.setSetting(SETTING_USE_AA_FILTER, 1);
+	m_soundTouch.setSetting(SETTING_AA_FILTER_LENGTH, 128);
 	m_soundTouch.setSetting(SETTING_SEQUENCE_MS, 1);
-	m_soundTouch.setSetting(SETTING_SEEKWINDOW_MS, 28);
-	m_soundTouch.setSetting(SETTING_OVERLAP_MS, 12);
+	//m_soundTouch.setSetting(SETTING_SEEKWINDOW_MS, 1);//? disable - auto is good
+	m_soundTouch.setSetting(SETTING_OVERLAP_MS, 1);
 	
 	m_run_thread = true;
 	m_thread = std::thread(&PulseAudio::SoundLoop, this);
@@ -172,13 +175,27 @@ void PulseAudio::WriteCallback(pa_stream* s, size_t length)
 			Core::RequestRefreshInfo();
 			rate = m_mixer->GetCurrentSpeed();
 		}
+		
+		//m_tempo = 0.95 * m_tempo + 0.05 * rate;
+		//m_tempo = std::min(m_tempo, rate);
+		if (rate > m_tempo) // lower tempo quickly, raise slowly
+		{
+			m_tempo = 0.95 * m_tempo + 0.05 * rate;
+		}
+		else
+		{
+			m_tempo = 0.90 * m_tempo + 0.10 * rate;
+		}
+		
 		// Place a lower limit of 10% speed.  When a game boots up, there will be
 		// many silence samples.  These do not need to be timestretched.
-		if (rate > 0.10)
+		static int cnt = 0;
+		/*cnt = ((cnt + 1) % 100);
+		if (cnt == 0)*/ if (m_tempo > 0.10)
 		{
-			//NOTICE_LOG(AUDIO, "rate %f", rate);
-			m_soundTouch.setTempo(rate);
-			if (rate > 10)
+			//NOTICE_LOG(AUDIO, "rate %0.4f / tempo %0.4f", rate, m_tempo);
+			m_soundTouch.setTempo(m_tempo);
+			if (m_tempo > 10)
 			{
 				m_soundTouch.clear();
 			}

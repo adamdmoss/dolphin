@@ -57,6 +57,7 @@ private:
 	pa_buffer_attr m_pa_ba;
 	
 	soundtouch::SoundTouch m_soundTouch; // used for sample-stretching
+	float m_tempo;
 #else
 public:
 	PulseAudio(CMixer *mixer) : SoundStream(mixer) {}
